@@ -53,6 +53,9 @@ class SimilarityChecker:
                 "max_similarity": 0.0,
                 "violations": [],
                 "sample_size": len(html_files),
+                "pairs_checked": 0,
+                "threshold": self.max_similarity,
+                "total_violations": 0,
             }
 
         if len(html_files) > sample_size:
@@ -75,6 +78,9 @@ class SimilarityChecker:
                 "max_similarity": 0.0,
                 "violations": [],
                 "sample_size": len(page_texts),
+                "pairs_checked": 0,
+                "threshold": self.max_similarity,
+                "total_violations": 0,
             }
 
         tfidf_matrix = self.vectorizer.fit_transform(page_texts)

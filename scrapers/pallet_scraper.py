@@ -151,7 +151,11 @@ class PalletScraper(BaseScraper):
         msrp_val = msrp or 0.0
         bid_val = current_bid or 0.0
         spread = msrp_val - bid_val if msrp_val > bid_val else 0.0
+        spread_pct = (spread / msrp_val * 100) if msrp_val > 0 else 0.0
         cost_per_unit = bid_val / item_count if item_count and item_count > 0 else 0.0
+
+        condition = self._extract_condition(card)
+        hours_remaining = self._estimate_hours_remaining(end_time)
 
         return {
             "auction_id": str(auction_id),
@@ -160,8 +164,12 @@ class PalletScraper(BaseScraper):
             "total_msrp": round(msrp_val, 2),
             "current_bid": round(bid_val, 2),
             "spread": round(spread, 2),
+            "spread_pct": round(spread_pct, 1),
             "number_of_items": item_count or 1,
             "cost_per_unit": round(cost_per_unit, 2),
+            "condition": condition,
+            "hours_remaining": hours_remaining,
+            "num_bids": self._extract_number(card, ["bids", "bid-count"]) or 0,
             "end_time": end_time,
             "scraped_at": datetime.now(timezone.utc).isoformat(),
             "source_url": base_url,
@@ -209,6 +217,33 @@ class PalletScraper(BaseScraper):
             if data_end:
                 return str(data_end)
         return None
+
+    @staticmethod
+    def _extract_condition(card: Tag) -> str:
+        """Extract condition label from the card."""
+        cond_el = card.select_one("[class*='condition'], [data-condition]")
+        if cond_el:
+            attr = cond_el.get("data-condition")
+            if attr:
+                return str(attr)
+            return cond_el.get_text(strip=True)
+        text = card.get_text()
+        for label in ["Like New", "Refurbished", "Used", "As-Is", "Salvage", "New"]:
+            if label.lower() in text.lower():
+                return label
+        return "Mixed"
+
+    @staticmethod
+    def _estimate_hours_remaining(end_time: str | None) -> int:
+        """Estimate hours remaining from an ISO end_time string."""
+        if not end_time:
+            return 0
+        try:
+            end_dt = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+            delta = end_dt - datetime.now(timezone.utc)
+            return max(int(delta.total_seconds() / 3600), 0)
+        except (ValueError, TypeError):
+            return 0
 
     @staticmethod
     def _generate_id(platform: str, title: str) -> str:
