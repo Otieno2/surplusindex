@@ -1,0 +1,124 @@
+name: Daily Scrape, Build & Deploy
+
+on:
+  schedule:
+    # Run daily at 3:00 AM UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      use_demo_data:
+        description: 'Use demo data instead of live scraping'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      pallet_count:
+        description: 'Number of pallet listings to generate (demo mode)'
+        required: false
+        default: '200'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  scrape-and-build:
+    runs-on: ubuntu-latest
+    outputs:
+      pages_generated: ${{ steps.build.outputs.pages_generated }}
+      similarity_passed: ${{ steps.build.outputs.similarity_passed }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright browsers (for live scraping)
+        if: github.event.inputs.use_demo_data != 'true'
+        run: |
+          pip install playwright
+          playwright install chromium --with-deps
+
+      - name: Run scraper
+        id: scrape
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ "${{ github.event.inputs.use_demo_data }}" = "true" ] || [ "${{ github.event_name }}" = "schedule" ]; then
+            python main.py scrape --demo --pallet-count ${{ github.event.inputs.pallet_count || '200' }}
+          else
+            python main.py scrape
+          fi
+
+      - name: Generate static site
+        id: build
+        run: |
+          python main.py generate --base-url ""
+          PAGES=$(find output -name "*.html" | wc -l)
+          echo "pages_generated=$PAGES" >> $GITHUB_OUTPUT
+
+      - name: Run similarity check
+        id: similarity
+        run: |
+          python main.py check --sample-size 80
+          echo "similarity_passed=true" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Upload build artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: output/
+
+      - name: Commit updated data (for tracking)
+        run: |
+          git config user.name "SurplusIndex Bot"
+          git config user.email "bot@surplusindex.io"
+          git add data/*.csv data/*.json || true
+          git diff --staged --quiet || git commit -m "data: daily scrape $(date -u +%Y-%m-%d)"
+          git push || true
+        continue-on-error: true
+
+  deploy:
+    needs: scrape-and-build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  notify:
+    needs: [scrape-and-build, deploy]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Build summary
+        run: |
+          echo "## Daily Build Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Pages generated: ${{ needs.scrape-and-build.outputs.pages_generated }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Similarity check: ${{ needs.scrape-and-build.outputs.similarity_passed || 'warning' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Deploy status: ${{ needs.deploy.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Build time: $(date -u)" >> $GITHUB_STEP_SUMMARY
