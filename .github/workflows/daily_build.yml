@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       pages_generated: ${{ steps.build.outputs.pages_generated }}
-      similarity_passed: ${{ steps.build.outputs.similarity_passed }}
+      similarity_passed: ${{ steps.similarity.outputs.similarity_passed }}
 
     steps:
       - name: Checkout repository
