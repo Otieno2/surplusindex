@@ -18,6 +18,14 @@ on:
         description: 'Number of pallet listings to generate (demo mode)'
         required: false
         default: '200'
+      allow_similarity_warnings:
+        description: 'Deploy a manual preview even if similarity validation fails'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 permissions:
   contents: write
@@ -77,8 +85,17 @@ jobs:
       - name: Run similarity check
         id: similarity
         run: |
-          python main.py check --sample-size 80
-          echo "similarity_passed=true" >> $GITHUB_OUTPUT
+          if [ "${{ github.event.inputs.allow_similarity_warnings }}" = "true" ]; then
+            set +e
+            python main.py check --sample-size 80
+            status=$?
+            set -e
+            echo "similarity_passed=$([ "$status" -eq 0 ] && echo true || echo warning)" >> $GITHUB_OUTPUT
+            echo "Preview mode enabled; similarity exit code: $status"
+          else
+            python main.py check --sample-size 80
+            echo "similarity_passed=true" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload build artifact
         uses: actions/upload-pages-artifact@v3
