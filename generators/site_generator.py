@@ -43,6 +43,7 @@ class SiteGenerator:
         self.env.filters["currency"] = lambda v: f"${v:,.2f}" if v else "$0.00"
         self.env.filters["number"] = lambda v: f"{v:,}" if v else "0"
         self.env.filters["pct"] = lambda v: f"{v:.1f}%" if v else "0.0%"
+        self.env.filters["slugify"] = self._slugify
 
     def generate(
         self,

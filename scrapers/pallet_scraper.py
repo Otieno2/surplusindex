@@ -156,6 +156,8 @@ class PalletScraper(BaseScraper):
 
         condition = self._extract_condition(card)
         hours_remaining = self._estimate_hours_remaining(end_time)
+        link = card.select_one("a[href]")
+        source_url = urljoin(base_url, str(link["href"])) if link and link.get("href") else base_url
 
         return {
             "auction_id": str(auction_id),
@@ -172,7 +174,7 @@ class PalletScraper(BaseScraper):
             "num_bids": self._extract_number(card, ["bids", "bid-count"]) or 0,
             "end_time": end_time,
             "scraped_at": datetime.now(timezone.utc).isoformat(),
-            "source_url": base_url,
+            "source_url": source_url,
         }
 
     def _extract_price(self, card: Tag, keywords: list[str]) -> float | None:

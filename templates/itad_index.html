@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block title %}{{ category | title }} Price Index{% endblock %}
-{% block canonical %}category/hardware-{{ category }}.html{% endblock %}
+{% block canonical %}category/hardware-{{ category | slugify }}.html{% endblock %}
 {% block meta_desc %}{{ total_items }} {{ category }} models tracked in the ITAD Blue Book. Average used price ${{ "%.0f" | format(avg_price) }}. Enterprise IT hardware pricing index.{% endblock %}
 
 {% block content %}

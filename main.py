@@ -138,19 +138,10 @@ def check(sample_size: int) -> None:
     logger.info("  PASSED: %s", result["passed"])
 
     if not result["passed"]:
-        violation_rate = result["total_violations"] / max(result["pairs_checked"], 1)
-        if violation_rate < 0.05:
-            logger.info("ACCEPTABLE: Only %.1f%% of pairs exceed threshold (< 5%% limit)",
-                       violation_rate * 100)
-            logger.info("  Top violations:")
-            for v in result["violations"][:5]:
-                logger.info("    %s <-> %s: %.2f%%", v["page_a"], v["page_b"], v["similarity"] * 100)
-        else:
-            logger.warning("FAIL: %.1f%% of pairs exceed threshold (> 5%% limit)",
-                          violation_rate * 100)
-            for v in result["violations"][:5]:
-                logger.warning("  %s <-> %s: %.2f%%", v["page_a"], v["page_b"], v["similarity"] * 100)
-            sys.exit(1)
+        logger.error("FAIL: %d page pairs exceed the similarity threshold", result["total_violations"])
+        for v in result["violations"][:5]:
+            logger.error("  %s <-> %s: %.2f%%", v["page_a"], v["page_b"], v["similarity"] * 100)
+        raise click.ClickException("similarity check failed")
 
 
 @cli.command()
@@ -192,12 +183,6 @@ def build(base_url: str, pallet_count: int) -> None:
                 result["max_similarity"] * 100,
                 result["threshold"] * 100)
 
-    if result["passed"]:
-        logger.info("BUILD SUCCESSFUL — All pages pass similarity check")
-    else:
-        logger.warning("BUILD WARNING — %d page pairs exceed similarity threshold",
-                       result["total_violations"])
-
     # Write build report
     report = {
         "build_time": datetime.now(timezone.utc).isoformat(),
@@ -207,6 +192,12 @@ def build(base_url: str, pallet_count: int) -> None:
     (OUTPUT_DIR / "api" / "build-report.json").write_text(
         json.dumps(report, indent=2, default=str)
     )
+
+    if not result["passed"]:
+        logger.error("BUILD FAILED — %d page pairs exceed similarity threshold", result["total_violations"])
+        raise click.ClickException("similarity check failed")
+
+    logger.info("BUILD SUCCESSFUL — All pages pass similarity check")
 
 
 @cli.command()

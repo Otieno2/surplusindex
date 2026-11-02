@@ -30,7 +30,9 @@ class SimilarityChecker:
             ngram_range=(1, 3),
             analyzer="word",
             min_df=1,
-            max_df=0.85,
+            # A fractional max_df can remove every term when checking only a
+            # few pages. Boilerplate is removed separately below.
+            max_df=1.0,
             sublinear_tf=True,
         )
 
@@ -59,7 +61,8 @@ class SimilarityChecker:
             }
 
         if len(html_files) > sample_size:
-            html_files = random.sample(html_files, sample_size)
+            # Keep CI results reproducible while retaining sampling support.
+            html_files = random.Random(0).sample(sorted(html_files), sample_size)
 
         page_texts: list[str] = []
         page_paths: list[str] = []

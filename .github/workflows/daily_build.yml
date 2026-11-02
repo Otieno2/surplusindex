@@ -61,7 +61,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          if [ "${{ github.event.inputs.use_demo_data }}" = "true" ] || [ "${{ github.event_name }}" = "schedule" ]; then
+          if [ "${{ github.event.inputs.use_demo_data }}" = "true" ]; then
             python main.py scrape --demo --pallet-count ${{ github.event.inputs.pallet_count || '200' }}
           else
             python main.py scrape
@@ -70,7 +70,7 @@ jobs:
       - name: Generate static site
         id: build
         run: |
-          python main.py generate --base-url ""
+          python main.py generate --base-url "/${{ github.event.repository.name }}"
           PAGES=$(find output -name "*.html" | wc -l)
           echo "pages_generated=$PAGES" >> $GITHUB_OUTPUT
 
@@ -79,7 +79,6 @@ jobs:
         run: |
           python main.py check --sample-size 80
           echo "similarity_passed=true" >> $GITHUB_OUTPUT
-        continue-on-error: true
 
       - name: Upload build artifact
         uses: actions/upload-pages-artifact@v3

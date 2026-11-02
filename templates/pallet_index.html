@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block title %}{{ category | replace('-', ' ') | title }} Pallets{% endblock %}
-{% block canonical %}category/pallets-{{ category }}.html{% endblock %}
+{% block canonical %}category/pallets-{{ category | slugify }}.html{% endblock %}
 {% block meta_desc %}{{ total_listings }} active {{ category | replace('-', ' ') }} liquidation pallet auctions. Average spread ${{ "%.0f" | format(avg_spread) }} below MSRP. Total retail value ${{ "%.0f" | format(total_value) }}.{% endblock %}
 
 {% block content %}
@@ -71,7 +71,7 @@
         {% for listing in listings %}
         <tr class="hover:bg-surface-50 transition">
           <td class="px-4 py-3">
-            <a href="{{ base_url }}/pallets/{{ listing.auction_id | lower | replace(' ', '-') }}.html" class="text-brand-600 hover:underline font-medium truncate block max-w-[250px]" title="{{ listing.title }}">
+            <a href="{{ base_url }}/pallets/{{ listing.auction_id | slugify }}.html" class="text-brand-600 hover:underline font-medium truncate block max-w-[250px]" title="{{ listing.title }}">
               {{ listing.title[:50] }}{% if listing.title|length > 50 %}...{% endif %}
             </a>
           </td>

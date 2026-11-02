@@ -184,12 +184,18 @@ class ITADScraper(BaseScraper):
         return {
             "component_type": category,
             "model": model,
+            # Live sources do not reliably expose MSRP or listing history. Keep
+            # the output schema stable so the static renderer can handle it.
+            "new_msrp": 0.0,
             "avg_market_price": round(avg_price, 2),
             "min_price": round(min_price, 2),
             "max_price": round(max_price, 2),
             "refurbished_retail_price": round(max_price * 1.3, 2),
             "bulk_lot_avg_price_per_unit": round(min_price * 0.7, 2),
+            "depreciation_pct": 0.0,
             "price_sources": len(valid_prices),
+            "active_listings": 0,
+            "price_history": [],
             "market_demand_rating": demand,
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "slug": re.sub(r"[^a-z0-9]+", "-", model.lower()).strip("-"),
