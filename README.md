@@ -124,3 +124,15 @@ You can trigger a build manually from the Actions tab with options for demo data
 ## License
 
 MIT
+
+## Live scraper sources
+
+The live scraper uses current public source paths. Pallet data comes from Liquidation.com, Direct Liquidation, and the documented GSA Auctions API. ITAD pricing uses the official eBay Browse API when `EBAY_CLIENT_ID` and `EBAY_CLIENT_SECRET` are set, with public HTML sources as additional fallbacks.
+
+Install the Playwright browser before live runs:
+
+```bash
+python -m playwright install chromium
+```
+
+Optional credentials are read from `GSA_API_KEY`, `EBAY_CLIENT_ID`, and `EBAY_CLIENT_SECRET`. The browser fallback renders public JavaScript pages when a normal request is blocked or incomplete; it does not solve CAPTCHAs, defeat authentication, or evade access controls.

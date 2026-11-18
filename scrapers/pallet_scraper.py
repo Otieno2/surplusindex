@@ -1,11 +1,13 @@
 """Scraper for liquidation pallet auctions across major platforms."""
 
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urljoin
 
+import requests
 from bs4 import BeautifulSoup, Tag
 
 from scrapers.base_scraper import BaseScraper
@@ -27,26 +29,21 @@ class PalletScraper(BaseScraper):
         "liquidation_com": {
             "base_url": "https://www.liquidation.com",
             "categories": [
-                "/auctions/computers-networking/",
-                "/auctions/consumer-electronics/",
-                "/auctions/general-merchandise/",
-                "/auctions/apparel/",
-                "/auctions/home-garden/",
+                "/wholesale-computers.html",
+                "/consumer-electronics.html",
+                "/general-merchandise.html",
             ],
         },
         "directliquidation": {
             "base_url": "https://www.directliquidation.com",
             "categories": [
-                "/listings/electronics/",
-                "/listings/home-and-garden/",
-                "/listings/apparel/",
+                "/search?sort=newestListings",
+                "/electronics",
             ],
         },
-        "bstock": {
-            "base_url": "https://bstock.com",
-            "categories": [
-                "/listings/",
-            ],
+        "gsa": {
+            "base_url": "https://api.gsa.gov",
+            "categories": ["/assets/gsaauctions/v2/auctions"],
         },
     }
 
@@ -60,6 +57,12 @@ class PalletScraper(BaseScraper):
         for source_name, config in self.SOURCES.items():
             logger.info("Scraping %s...", source_name)
             for category_path in config["categories"]:
+                if source_name == "gsa":
+                    listings = self._fetch_gsa(category_path)
+                    all_listings.extend(listings)
+                    logger.info("Found %d listings from GSA Auctions", len(listings))
+                    continue
+
                 url = urljoin(config["base_url"], category_path)
                 soup = self.fetch_page(url)
                 if soup is None:
@@ -72,13 +75,14 @@ class PalletScraper(BaseScraper):
                     all_listings.extend(listings)
                     logger.info("Found %d listings from %s%s", len(listings), source_name, category_path)
 
+        self.close()
         return all_listings
 
     def _parse_liquidation_com(
         self, soup: BeautifulSoup, base_url: str, category_path: str
     ) -> list[dict[str, Any]]:
         listings: list[dict[str, Any]] = []
-        cards = soup.select(".auction-item, .lot-card, [data-auction-id]")
+        cards = self._find_liquidation_cards(soup)
 
         for card in cards:
             if not isinstance(card, Tag):
@@ -94,7 +98,7 @@ class PalletScraper(BaseScraper):
         self, soup: BeautifulSoup, base_url: str, category_path: str
     ) -> list[dict[str, Any]]:
         listings: list[dict[str, Any]] = []
-        cards = soup.select(".listing-card, .product-item, [data-listing-id]")
+        cards = self._find_direct_liquidation_cards(soup)
 
         for card in cards:
             if not isinstance(card, Tag):
@@ -122,12 +126,93 @@ class PalletScraper(BaseScraper):
 
         return listings
 
+    @staticmethod
+    def _find_liquidation_cards(soup: BeautifulSoup) -> list[Tag]:
+        cards: list[Tag] = []
+        seen: set[str] = set()
+        for link in soup.select("a[href*='/auction/view?id=']"):
+            href = str(link.get("href", ""))
+            if href in seen:
+                continue
+            seen.add(href)
+            container = link.find_parent(
+                lambda tag: isinstance(tag, Tag)
+                and "Current Bid" in tag.get_text(" ", strip=True)
+            )
+            cards.append(container or link.parent)
+        return cards
+
+    @staticmethod
+    def _find_direct_liquidation_cards(soup: BeautifulSoup) -> list[Tag]:
+        cards = soup.select(".listing-card, .product-item, [data-listing-id]")
+        if cards:
+            return [card for card in cards if isinstance(card, Tag)]
+        return [
+            link.find_parent("article") or link.parent
+            for link in soup.select("a[href*='/listing'], a[href*='/product']")
+        ]
+
+    def _fetch_gsa(self, path: str) -> list[dict[str, Any]]:
+        """Fetch live GSA listings through its documented public API."""
+        api_key = os.getenv("GSA_API_KEY", "DEMO_KEY")
+        url = f"{self.SOURCES['gsa']['base_url']}{path}"
+        try:
+            self._throttle()
+            response = self.session.get(
+                url,
+                params={"api_key": api_key, "format": "JSON"},
+                headers=self.headers,
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("GSA Auctions API failed: %s", exc)
+            return []
+
+        listings: list[dict[str, Any]] = []
+        for item in payload.get("Results", payload.get("results", [])):
+            title = str(item.get("itemName") or item.get("ItemName") or "GSA surplus lot").strip()
+            if not title:
+                continue
+            high_bid = self._parse_money(item.get("highBidAmount") or item.get("HighBidAmount"))
+            lot_info = item.get("lotInfo") or item.get("LotInfo") or []
+            item_count = len(lot_info) if isinstance(lot_info, list) else 1
+            sale_no = item.get("saleNo", item.get("SaleNo", "unknown"))
+            lot_no = item.get("lotNo", item.get("LotNo", "unknown"))
+            end_time = item.get("aucEndDt") or item.get("AucEndDt")
+            listings.append({
+                "auction_id": f"GSA-{sale_no}-{lot_no}",
+                "title": title,
+                "platform": "GSA Auctions",
+                "total_msrp": 0.0,
+                "current_bid": high_bid,
+                "spread": 0.0,
+                "spread_pct": 0.0,
+                "number_of_items": item_count,
+                "cost_per_unit": round(high_bid / item_count, 2),
+                "condition": "Mixed",
+                "hours_remaining": self._estimate_hours_remaining(end_time),
+                "num_bids": int(item.get("biddersCount") or item.get("BiddersCount") or 0),
+                "end_time": end_time,
+                "scraped_at": datetime.now(timezone.utc).isoformat(),
+                "source_url": item.get("itemDescURL") or item.get("ItemDescURL") or "https://www.gsaauctions.gov/",
+                "category": "government-surplus",
+            })
+        return listings
+
+    @staticmethod
+    def _parse_money(value: Any) -> float:
+        match = re.search(r"[\d,]+(?:\.\d+)?", str(value or ""))
+        return float(match.group(0).replace(",", "")) if match else 0.0
+
     def _extract_listing_data(
         self, card: Tag, platform: str, base_url: str
     ) -> dict[str, Any] | None:
         """Generic extraction from a listing card element."""
         title_el = card.select_one(
-            "h3, h4, .title, .lot-title, .listing-title, [class*='title']"
+            "h3, h4, .title, .lot-title, .listing-title, [class*='title'], "
+            "a[href*='/auction/view?id=']"
         )
         title = title_el.get_text(strip=True) if title_el else None
         if not title:
@@ -142,6 +227,9 @@ class PalletScraper(BaseScraper):
 
         msrp = self._extract_price(card, ["msrp", "retail", "original"])
         current_bid = self._extract_price(card, ["bid", "price", "current"])
+        text = card.get_text(" ", strip=True)
+        msrp = msrp or self._extract_labeled_money(text, ["Est. Retail", "MSRP", "Retail"])
+        current_bid = current_bid or self._extract_labeled_money(text, ["Current Bid", "Current Price"])
         item_count = self._extract_number(card, ["items", "units", "quantity", "count"])
         end_time = self._extract_end_time(card)
 
@@ -192,6 +280,16 @@ class PalletScraper(BaseScraper):
                 except ValueError:
                     pass
         return None
+
+    @staticmethod
+    def _extract_labeled_money(text: str, labels: list[str]) -> float | None:
+        label_pattern = "|".join(re.escape(label) for label in labels)
+        match = re.search(
+            rf"(?:{label_pattern})\s*:?\s*\$?([\d,]+(?:\.\d+)?)",
+            text,
+            re.IGNORECASE,
+        )
+        return float(match.group(1).replace(",", "")) if match else None
 
     def _extract_number(self, card: Tag, keywords: list[str]) -> int | None:
         for kw in keywords:

@@ -1,10 +1,12 @@
 """Scraper for IT Asset Disposition (ITAD) hardware pricing — the 'Blue Book' index."""
 
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any
 
+import requests
 from bs4 import BeautifulSoup, Tag
 
 from scrapers.base_scraper import BaseScraper
@@ -118,7 +120,7 @@ HARDWARE_CATEGORIES = {
 
 
 class ITADScraper(BaseScraper):
-    """Scrapes IT hardware pricing from refurbishers, eBay sold listings, and surplus sites.
+    """Scrapes IT hardware pricing from public refurbishers and eBay active listings.
 
     Builds a 'Kelly Blue Book' style index for used enterprise hardware.
     """
@@ -126,18 +128,15 @@ class ITADScraper(BaseScraper):
     SOURCES = {
         "pcliquidations": {
             "base_url": "https://www.pcliquidations.com",
-            "search_path": "/search?q=",
+            "search_path": "/search?query=",
         },
         "servermonkey": {
             "base_url": "https://www.servermonkey.com",
             "search_path": "/search?type=product&q=",
         },
-        "govdeals": {
-            "base_url": "https://www.govdeals.com",
-            "search_path": (
-                "/index.cfm?fa=Main.AdvSearchResultsNew"
-                "&searchPg=Category&additession=&inv_num=&agency=&state=&description="
-            ),
+        "liquidation_com": {
+            "base_url": "https://www.liquidation.com",
+            "search_path": "/wholesale-computers.html",
         },
     }
 
@@ -156,19 +155,27 @@ class ITADScraper(BaseScraper):
                     all_records.append(record)
                     logger.info("Got pricing for %s", model)
 
+        self.close()
         return all_records
 
     def _scrape_model(self, model: str, category: str) -> dict[str, Any] | None:
         """Aggregate pricing data for a specific hardware model across sources."""
         prices: dict[str, float | None] = {}
 
+        ebay_prices = self._search_ebay(model)
+        if ebay_prices:
+            prices["ebay_browse"] = sum(ebay_prices) / len(ebay_prices)
+
         for source_name, config in self.SOURCES.items():
-            url = config["base_url"] + config["search_path"] + model.replace(" ", "+")
+            separator = "" if "?" in config["search_path"] else "?q="
+            url = config["base_url"] + config["search_path"]
+            if source_name != "liquidation_com":
+                url += f"{separator}{model.replace(' ', '+')}"
             soup = self.fetch_page(url)
             if soup is None:
                 continue
 
-            price = self._extract_best_price(soup, source_name)
+            price = self._extract_best_price(soup, source_name, model)
             prices[source_name] = price
 
         valid_prices = [p for p in prices.values() if p is not None and p > 0]
@@ -194,6 +201,7 @@ class ITADScraper(BaseScraper):
             "bulk_lot_avg_price_per_unit": round(min_price * 0.7, 2),
             "depreciation_pct": 0.0,
             "price_sources": len(valid_prices),
+            "price_source_names": sorted(source for source, value in prices.items() if value and value > 0),
             "active_listings": 0,
             "price_history": [],
             "market_demand_rating": demand,
@@ -201,7 +209,7 @@ class ITADScraper(BaseScraper):
             "slug": re.sub(r"[^a-z0-9]+", "-", model.lower()).strip("-"),
         }
 
-    def _extract_best_price(self, soup: BeautifulSoup, source: str) -> float | None:
+    def _extract_best_price(self, soup: BeautifulSoup, source: str, model: str = "") -> float | None:
         """Extract the most relevant price from a search results page."""
         price_selectors = [
             ".price",
@@ -236,6 +244,48 @@ class ITADScraper(BaseScraper):
         if prices_found:
             return sorted(prices_found)[len(prices_found) // 2]
         return None
+
+    def _search_ebay(self, model: str) -> list[float]:
+        """Search active eBay listings through the official Browse API when configured."""
+        client_id = os.getenv("EBAY_CLIENT_ID")
+        client_secret = os.getenv("EBAY_CLIENT_SECRET")
+        if not client_id or not client_secret:
+            return []
+        try:
+            token_response = self.session.post(
+                "https://api.ebay.com/identity/v1/oauth2/token",
+                auth=(client_id, client_secret),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data={
+                    "grant_type": "client_credentials",
+                    "scope": "https://api.ebay.com/oauth/api_scope",
+                },
+                timeout=30,
+            )
+            token_response.raise_for_status()
+            token = token_response.json()["access_token"]
+            response = self.session.get(
+                "https://api.ebay.com/buy/browse/v1/item_summary/search",
+                params={"q": model, "limit": 20, "filter": "conditions:{USED|REFURBISHED}"},
+                headers={"Authorization": f"Bearer {token}", "X-EBAY-C-MARKETPLACE-ID": "EBAY_US"},
+                timeout=30,
+            )
+            response.raise_for_status()
+            items = response.json().get("itemSummaries", [])
+        except (OSError, KeyError, requests.RequestException, ValueError) as exc:
+            logger.warning("eBay Browse API failed for %s: %s", model, exc)
+            return []
+
+        prices: list[float] = []
+        for item in items:
+            value = (item.get("price") or {}).get("value")
+            try:
+                price = float(value)
+            except (TypeError, ValueError):
+                continue
+            if 1.0 < price < 500000.0:
+                prices.append(price)
+        return prices
 
     @staticmethod
     def _calculate_demand(num_sources: int, avg_price: float, category: str) -> str:
